@@ -48,6 +48,9 @@ int main(int argc, char *argv[])
 	char *tar;
 	char *pat;
 
+	type_of_device = atoi(argv[2]);
+	type_of_pat = atoi(argv[3]);
+
 	// read in target text file
 	FILE *file = fopen(argv[1], "r");
 	if (!file)
@@ -61,13 +64,19 @@ int main(int argc, char *argv[])
 	printf("File size: %d\n", fsize);
 	fseek(file, 0, SEEK_SET);
 	// allocate buffer
-	tar = (char *)malloc(fsize);
+	// utilize pinned memory
+	if(type_of_device == 0){
+		tar = (char *)malloc(fsize);
+	} 
+	else{
+		cudaHostAlloc((void **)&tar, fsize, cudaHostAllocDefault);
+		check_CUDA_Error("Pinned memory allocation on host - text");
+	}
 	// read the file into buffer
 	fread(tar, fsize, 1, file);
 	// close the file
 	fclose(file);
 
-	type_of_pat = atoi(argv[3]);
 	if (type_of_pat == 0)
 	{
 		int cSize = 4; //size of char is 1, but size of ascii 'a' is 4 like int
@@ -91,14 +100,19 @@ int main(int argc, char *argv[])
 		printf("Pattern size: %d\n", fsize);
 		fseek(fp, 0, SEEK_SET);
 		// allocate buffer
-		pat = (char *)malloc(fsize);
+		// utilize pinned memory
+		if(type_of_device == 0){
+			pat = (char *)malloc(fsize);
+		}
+		else{
+			cudaHostAlloc((void **)&pat, fsize, cudaHostAllocDefault);
+			check_CUDA_Error("Pinned memory allocation on host - pattern");
+		}
 		// read the file into buffer
 		fread(pat, fsize, 1, fp);
 		// close the file
 		fclose(fp);
 	}
-
-	type_of_device = atoi(argv[2]);
 
 	int n = strlen(tar);
 	int m = strlen(pat);
@@ -121,6 +135,8 @@ int main(int argc, char *argv[])
 		start = clock();
 		seq_search(tar, n, pat, m, output, badchar);
 		end = clock();
+		free(tar);
+		free(pat);
 	}
 	// Single GPU version
 	else if (type_of_device == 1)
@@ -129,6 +145,8 @@ int main(int argc, char *argv[])
 		start = clock();
 		gpu_search(tar, n, pat, m, output, badchar);
 		end = clock();
+		cudaFreeHost(tar);
+  		cudaFreeHost(pat);
 	}
 	// Multi GPU version
 	else if (type_of_device == 2)
@@ -140,6 +158,8 @@ int main(int argc, char *argv[])
 		start = clock();
 		multi_gpu_search(tar, n, pat, m, output, badchar);
 		end = clock();
+		cudaFreeHost(tar);
+  		cudaFreeHost(pat);
 	}
 	else
 	{
@@ -177,8 +197,6 @@ int main(int argc, char *argv[])
 	time_taken = ((double)(end - start)) / CLOCKS_PER_SEC;
 	printf("Time taken is %lf\n", time_taken);
 
-	free(tar);
-	free(pat);
 	delete badchar;
 	delete output;
 	return 0;
