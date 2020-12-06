@@ -79,22 +79,53 @@ __global__ void kmp_kernel(char* target, char* pattern, int* lps, int* ans, int 
     int i = (idx * chunk_size);
     int j = (idx * chunk_size) + chunk_size + pattern_size;
 
+    if (i >= target_size){
+        return;
+    }
+
+    if (j > target_size){
+        j = target_size;
+    }
+
+    int k = 0;
+
+    while (i < j){
+        while (k > 0 && (target[i] != pattern[k])){
+            k = lps[k - 1];
+        }
+        if (target[i] == pattern[k]){
+            k++;
+        }
+        if (k == pattern_size){
+            ans[i - k + 1] = 1;
+            k = lps[k-1];
+        }
+        i++;
+    }
+
+    return;
+}
+
+__global__ void kmp_kernel_share(char* target, char* pattern, int* lps, int* ans, int target_size, int pattern_size, int chunk_size){
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = (idx * chunk_size);
+    int j = (idx * chunk_size) + chunk_size + pattern_size;
+
     __shared__ int n_lps[800];
 
-    int d = 0;
-    while (d < pattern_size){
-        n_lps[d] = lps[d];
-        d++;
+    __syncthreads();
+
+    int pattern_chunk_size = ceil((double) pattern_size / NUM_THREADS_PER_BLOCK);
+    int pi = threadIdx.x * pattern_chunk_size;
+    int pj = threadIdx.x * pattern_chunk_size + pattern_chunk_size;
+
+    while (pi < pattern_size && pi < pj){
+        n_lps[pi] = lps[pi];
+        pi++;
     }
 
     __syncthreads();
     
-    /*
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int i = pattern_size * idx;
-    int j = pattern_size * (idx + 2);
-    */
-
     if (i >= target_size){
         return;
     }
@@ -147,8 +178,12 @@ int main(int argc, char* argv[]){
     int target_size;
     int pattern_size;
 
+    if (argc < 5){
+        printf("./kmp <shared_memory> <pinned_memory> <pattern_provided> <target_file> <pattern_file>\n");
+        exit(1);
+    }
     
-    FILE *fp = fopen(argv[1], "r");
+    FILE *fp = fopen(argv[4], "r");
     if (!fp)
     {
         exit(EXIT_FAILURE);
@@ -156,20 +191,29 @@ int main(int argc, char* argv[]){
     fseek(fp, 0, SEEK_END);
     int fsize = ftell(fp);
     fseek(fp, 0, SEEK_SET);
-    target = (char *) malloc(fsize);
+    if (atoi(argv[2]) == 0){
+        target = (char *) malloc(fsize);
+    } else{
+        cudaHostAlloc((void **)&target, fsize, cudaHostAllocDefault);
+        check_CUDA_Error("Pinned memory allocation on host - target");
+    }
     fread(target, fsize, 1, fp);
     fclose(fp);
     target_size = strlen(target) - 1;
 
-    int type_of_pat = atoi(argv[2]);
-    if (type_of_pat == 0){
+    if (atoi(argv[3]) == 0){
         const int pat_buffer_size = 40000000;
-        pattern = (char *)malloc(pat_buffer_size * sizeof(char));
+        if (atoi(argv[2]) == 0){
+            pattern = (char *)malloc(pat_buffer_size * sizeof(char));
+        } else{
+            cudaHostAlloc((void **)&pattern, pat_buffer_size, cudaHostAllocDefault);
+            check_CUDA_Error("Pinned memory allocation on host - pattern");
+        }
         printf("Please type a pattern/keyword you would like to search:\n");
         cin >> pattern;
         pattern_size = strlen(pattern);
     } else {
-        fp = fopen(argv[3], "r");
+        fp = fopen(argv[5], "r");
         if (!fp)
         {
             exit(EXIT_FAILURE);
@@ -177,7 +221,12 @@ int main(int argc, char* argv[]){
         fseek(fp, 0, SEEK_END);
         fsize = ftell(fp);
         fseek(fp, 0, SEEK_SET);
-        pattern = (char *) malloc(fsize);
+        if (atoi(argv[2]) == 0){
+            pattern = (char *)malloc(fsize * sizeof(char));
+        } else{
+            cudaHostAlloc((void **)&pattern, fsize, cudaHostAllocDefault);
+            check_CUDA_Error("Pinned memory allocation on host - pattern");
+        }
         fread(pattern, fsize, 1, fp);
         fclose(fp);
         pattern_size = strlen(pattern) - 1;
@@ -274,15 +323,11 @@ int main(int argc, char* argv[]){
     cudaMalloc((void**)&g_ans, target_size * sizeof(int));
     check_CUDA_Error("memory allocation on device");
 
-    //printf("memory allocation on device\n");
-
     cudaMemcpy(g_target, target, target_size * sizeof(char), cudaMemcpyHostToDevice);
     cudaMemcpy(g_pattern, pattern, pattern_size * sizeof(char), cudaMemcpyHostToDevice);
     cudaMemcpy(g_lps, lps, pattern_size * sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(g_ans, ans, target_size * sizeof(int), cudaMemcpyHostToDevice);
     check_CUDA_Error("memory copy to device");
-
-    //printf("memory copy to device\n");
 
     //int dim = ceil((double) target_size / (2 * pattern_size));
     //dim3 numBlock(1, 1, 1);
@@ -302,22 +347,20 @@ int main(int argc, char* argv[]){
     int chunk_size = ceil((double) target_size / (n_thread));
 
     //kmp_kernel<<<(target_size / pattern_size + n_thread) / n_thread, n_thread>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size);
-    kmp_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, SIZE_OF_CHUNK);
+    if (atoi(argv[1]) == 0){
+        kmp_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, SIZE_OF_CHUNK);
+    } else {
+        kmp_kernel_share<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, SIZE_OF_CHUNK);
+    }
     //kmp_kernel<<<numBlock, numThread>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, chunk_size);
     
-    //check_CUDA_Error("Launch kernal");
+    check_CUDA_Error("Launch kernal");
     
-    //printf("Launch kernal\n");
-
     cudaDeviceSynchronize();
     check_CUDA_Error("DeviceSynchronize");
 
-    //printf("DeviceSynchronize\n");
-
     cudaMemcpy(ans, g_ans, target_size * sizeof(int), cudaMemcpyDeviceToHost);
     check_CUDA_Error("memory copy to host");
-
-    //printf("memory copy to host\n");
 
     end = clock();
 
@@ -338,8 +381,13 @@ int main(int argc, char* argv[]){
     cudaFree(g_lps);
     cudaFree(g_ans);
 
-    free(target);
-    free(pattern);
+    if (atoi(argv[2]) != 0){
+        cudaFreeHost(target);
+        cudaFreeHost(pattern);
+    } else {
+        free(target);
+        free(pattern);
+    }
     free(lps);
     free(ans);
 
