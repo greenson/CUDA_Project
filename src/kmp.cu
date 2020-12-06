@@ -16,6 +16,7 @@ using namespace std;
 void buildLPS(char*, int*, int);
 void seq_kmp(char*, char*, int*, int*, int, int);
 void check_CUDA_Error(const char*);
+double single_gpu(char*, char*, int*, int*, int, int, int);
 
 void check_CUDA_Error(const char *msg)
 {
@@ -153,6 +154,181 @@ __global__ void kmp_kernel_share(char* target, char* pattern, int* lps, int* ans
     return;
 }
 
+double single_gpu(char* target, char* pattern, int* lps, int* ans, int target_size, int pattern_size, int shared){
+    char* g_target;
+    char* g_pattern;
+    int* g_lps;
+    int* g_ans;
+    clock_t start, end;
+    double time_taken;
+
+    start = clock();
+
+    cudaMalloc((void**)&g_target, target_size * sizeof(char));
+    cudaMalloc((void**)&g_pattern, pattern_size * sizeof(char));
+    cudaMalloc((void**)&g_lps, pattern_size * sizeof(int));
+    cudaMalloc((void**)&g_ans, target_size * sizeof(int));
+    check_CUDA_Error("memory allocation on device");
+
+    cudaMemcpy(g_target, target, target_size * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_pattern, pattern, pattern_size * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_lps, lps, pattern_size * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_ans, ans, target_size * sizeof(int), cudaMemcpyHostToDevice);
+    check_CUDA_Error("memory copy to device");
+
+    int num_chunks = (target_size - 1) / SIZE_OF_CHUNK + 1;
+    int num_blocks = 0;
+    for (int i = 0; i < num_chunks; i += NUM_THREADS_PER_BLOCK){
+        num_blocks++;
+    }
+    
+    dim3 numBlock(1, 1, 1);
+    dim3 numThread(n_thread, 1, 1);
+    
+    int chunk_size = ceil((double) target_size / (n_thread));
+
+    //kmp_kernel<<<(target_size / pattern_size + n_thread) / n_thread, n_thread>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size);
+    if (shared == 0){
+        kmp_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, SIZE_OF_CHUNK);
+    } else {
+        kmp_kernel_share<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, SIZE_OF_CHUNK);
+    }
+    //kmp_kernel<<<numBlock, numThread>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, chunk_size);
+    
+    check_CUDA_Error("Launch kernal");
+    
+    cudaDeviceSynchronize();
+    check_CUDA_Error("DeviceSynchronize");
+
+    cudaMemcpy(ans, g_ans, target_size * sizeof(int), cudaMemcpyDeviceToHost);
+    check_CUDA_Error("memory copy to host");
+
+    end = clock();
+
+    time_taken = ((double)(end - start))/ CLOCKS_PER_SEC;
+
+    cudaFree(g_target);
+    cudaFree(g_pattern);
+    cudaFree(g_lps);
+    cudaFree(g_ans);
+
+    return time_taken;
+}
+
+
+double multi_gpu(char* target, char* pattern, int* lps, int* ans, int target_size, int pattern_size, int shared){
+    int slice_len = target_size / 2 + pattern_size - 1;
+    float slice_overlap = (float) slice_len / (float) target_size;
+    if (slice_overlap > 0.8)
+    {
+        printf("----Multi GPU utilization low, switching to Single version----\n");
+        return single_gpu(target, pattern, lps, ans, target_size, pattern_size, shared);
+    }
+    if (slice_overlap < 0.5)
+    {
+        slice_len++;
+    }
+
+    int offset = target_size - slice_len;
+
+    char* g_target_first;
+    char* g_target_second;
+    char* g_pattern_first;
+    char* g_pattern_second;
+    int* g_lps_first;
+    int* g_lps_second;
+    int* g_ans_first;
+    int* g_ans_second;
+    clock_t start, end;
+    double time_taken;
+
+    start = clock();
+
+    cudaSetDevice(0);
+    check_CUDA_Error("Set Device 0 as current");
+
+    cudaMalloc((void**)&g_target_first, slice_len * sizeof(char));
+    cudaMalloc((void**)&g_pattern_first, pattern_size * sizeof(char));
+    cudaMalloc((void**)&g_lps_first, pattern_size * sizeof(int));
+    cudaMalloc((void**)&g_ans_first, slice_len * sizeof(int));
+    check_CUDA_Error("memory allocation on device 0");
+
+    cudaMemcpy(g_target_first, target, slice_len * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_pattern_first, pattern, pattern_size * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_lps_first, lps, pattern_size * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_ans_first, ans, slice_len * sizeof(int), cudaMemcpyHostToDevice);
+    check_CUDA_Error("memory copy to device 0");
+
+    cudaSetDevice(1);
+    check_CUDA_Error("Set Device 1 as current");
+
+    cudaMalloc((void**)&g_target_second, slice_len * sizeof(char));
+    cudaMalloc((void**)&g_pattern_second, pattern_size * sizeof(char));
+    cudaMalloc((void**)&g_lps_second, pattern_size * sizeof(int));
+    cudaMalloc((void**)&g_ans_second, slice_len * sizeof(int));
+    check_CUDA_Error("memory allocation on device 1");
+
+    cudaMemcpy(g_target_second, &target[offset], slice_len * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_pattern_second, pattern, pattern_size * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_lps_second, lps, pattern_size * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_ans_second, &ans[offset], slice_len * sizeof(int), cudaMemcpyHostToDevice);
+    check_CUDA_Error("memory copy to device 1");
+
+    int num_chunks = (slice_len - 1) / SIZE_OF_CHUNK + 1;
+    int num_blocks = 0;
+    for (int i = 0; i < num_chunks; i += NUM_THREADS_PER_BLOCK){
+        num_blocks++;
+    }
+    
+    cudaSetDevice(0);
+    if (shared == 0){
+        kmp_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target_first, g_pattern_first, g_lps_first, g_ans_first, slice_len, pattern_size, SIZE_OF_CHUNK);
+    } else {
+        kmp_kernel_share<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target_first, g_pattern_first, g_lps_first, g_ans_first, slice_len, pattern_size, SIZE_OF_CHUNK);
+    }
+    check_CUDA_Error("Launch kernal on device 0");
+    
+    cudaSetDevice(1);
+    if (shared == 0){
+        kmp_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target_second, g_pattern_second, g_lps_second, g_ans_second, slice_len, pattern_size, SIZE_OF_CHUNK);
+    } else {
+        kmp_kernel_share<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target_second, g_pattern_second, g_lps_second, g_ans_second, slice_len, pattern_size, SIZE_OF_CHUNK);
+    }
+    check_CUDA_Error("Launch kernal on device 1");
+    
+    cudaSetDevice(0);
+    cudaDeviceSynchronize();
+    check_CUDA_Error("DeviceSynchronize");
+    cudaMemcpy(ans, g_ans_first, slice_len * sizeof(int), cudaMemcpyDeviceToHost);
+    check_CUDA_Error("device 0 memory copy to host");
+
+    cudaSetDevice(1);
+    cudaDeviceSynchronize();
+    check_CUDA_Error("DeviceSynchronize");
+    cudaMemcpy(&ans[offset], g_ans_second, slice_len * sizeof(int), cudaMemcpyDeviceToHost);
+    check_CUDA_Error("device 1 memory copy to host");
+
+    end = clock();
+
+    time_taken = ((double)(end - start))/ CLOCKS_PER_SEC;
+
+
+    cudaSetDevice(0);
+    cudaFree(g_target_first);
+    cudaFree(g_pattern_first);
+    cudaFree(g_lps_first);
+    cudaFree(g_ans_first);
+
+    cudaSetDevice(1);
+    cudaFree(g_target_second);
+    cudaFree(g_pattern_second);
+    cudaFree(g_lps_second);
+    cudaFree(g_ans_second);
+
+    return time_taken;
+}
+
+
 int main(int argc, char* argv[]){
     /*
     char* target = (char*) malloc(max_target_size * sizeof(char));
@@ -249,12 +425,6 @@ int main(int argc, char* argv[]){
         naive_ans[i] = 0;
     }
 
-    char* g_target;
-    char* g_pattern;
-
-    int* g_lps;
-    int* g_ans;
-
     clock_t start, end;
 
     int count;
@@ -315,56 +485,9 @@ int main(int argc, char* argv[]){
 
     buildLPS(pattern, lps, pattern_size);
 
-    start = clock();
+    int shared = atoi(argv[1]);
 
-    cudaMalloc((void**)&g_target, target_size * sizeof(char));
-    cudaMalloc((void**)&g_pattern, pattern_size * sizeof(char));
-    cudaMalloc((void**)&g_lps, pattern_size * sizeof(int));
-    cudaMalloc((void**)&g_ans, target_size * sizeof(int));
-    check_CUDA_Error("memory allocation on device");
-
-    cudaMemcpy(g_target, target, target_size * sizeof(char), cudaMemcpyHostToDevice);
-    cudaMemcpy(g_pattern, pattern, pattern_size * sizeof(char), cudaMemcpyHostToDevice);
-    cudaMemcpy(g_lps, lps, pattern_size * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(g_ans, ans, target_size * sizeof(int), cudaMemcpyHostToDevice);
-    check_CUDA_Error("memory copy to device");
-
-    //int dim = ceil((double) target_size / (2 * pattern_size));
-    //dim3 numBlock(1, 1, 1);
-    //dim3 numThread(dim, 1, 1);
-    //printf("dim: %d, pat: %d, tar: %d\n", dim, target_size, pattern_size);
-    //kmp_kernel<<<numBlock, numThread>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size);
-
-    int num_chunks = (target_size - 1) / SIZE_OF_CHUNK + 1;
-    int num_blocks = 0;
-    for (int i = 0; i < num_chunks; i += NUM_THREADS_PER_BLOCK){
-        num_blocks++;
-    }
-    
-    dim3 numBlock(1, 1, 1);
-    dim3 numThread(n_thread, 1, 1);
-    
-    int chunk_size = ceil((double) target_size / (n_thread));
-
-    //kmp_kernel<<<(target_size / pattern_size + n_thread) / n_thread, n_thread>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size);
-    if (atoi(argv[1]) == 0){
-        kmp_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, SIZE_OF_CHUNK);
-    } else {
-        kmp_kernel_share<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, SIZE_OF_CHUNK);
-    }
-    //kmp_kernel<<<numBlock, numThread>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, chunk_size);
-    
-    check_CUDA_Error("Launch kernal");
-    
-    cudaDeviceSynchronize();
-    check_CUDA_Error("DeviceSynchronize");
-
-    cudaMemcpy(ans, g_ans, target_size * sizeof(int), cudaMemcpyDeviceToHost);
-    check_CUDA_Error("memory copy to host");
-
-    end = clock();
-
-    time_taken = ((double)(end - start))/ CLOCKS_PER_SEC;
+    time_taken = single_gpu(target, pattern, lps, ans, target_size, pattern_size, shared);
 
     count = 0;
 
@@ -374,12 +497,24 @@ int main(int argc, char* argv[]){
         }
     }
 
-    printf("kmp gpu found: %d, time taken: %lf\n", count, time_taken);
+    printf("kmp single_gpu found: %d, time taken: %lf\n", count, time_taken);
 
-    cudaFree(g_target);
-    cudaFree(g_pattern);
-    cudaFree(g_lps);
-    cudaFree(g_ans);
+    for (int i = 0; i < target_size; i++){
+        ans[i] = 0;
+    }
+
+    time_taken = multi_gpu(target, pattern, lps, ans, target_size, pattern_size, shared);
+
+    count = 0;
+
+    for (int i = 0; i < target_size; i++){
+        if (ans[i] != 0){
+            count++;
+        }
+
+    }
+
+    printf("kmp multi_gpu found: %d, time taken: %lf\n", count, time_taken);
 
     if (atoi(argv[2]) != 0){
         cudaFreeHost(target);
