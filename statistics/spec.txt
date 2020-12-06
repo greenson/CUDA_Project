@@ -1,0 +1,20 @@
+Server: NYU CUDA5
+
+Text sets: chro_5MB, chro_10MB, chro_20MB, chro_40MB, chro_80MB
+
+Pattern sets: 
+ACCT - 4, 
+AACTGTAA - 8, 
+AATGCTGGGATTACAG - 16, 
+AAAGTGCTGGGATTACAGGCATGAGCCACCGC - 32, 
+TTTTTCTAAACAGTCAATTCGGCCGCTGTTCGGCTGCGCGGCGGCAGCTCCCGGCGGCTCCTGG  - 64
+
+Worstcase: worstcase.txt
+Pattern sets:
+a - 1,
+aa- 2,
+aaaa - 4,
+aaaaaaaa - 8,
+aaaaaaaaaaaaaaaa - 16,
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa - 32,
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa - 64,
