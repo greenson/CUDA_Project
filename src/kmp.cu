@@ -8,7 +8,7 @@
 #define max_pattern_size 40000000
 #define n_thread 256
 
-#define NUM_THREADS_PER_BLOCK 512
+#define NUM_THREADS_PER_BLOCK 256
 #define SIZE_OF_CHUNK 32
 
 using namespace std;
@@ -79,6 +79,16 @@ __global__ void kmp_kernel(char* target, char* pattern, int* lps, int* ans, int 
     int i = (idx * chunk_size);
     int j = (idx * chunk_size) + chunk_size + pattern_size;
 
+    __shared__ int n_lps[800];
+
+    int d = 0;
+    while (d < pattern_size){
+        n_lps[d] = lps[d];
+        d++;
+    }
+
+    __syncthreads();
+    
     /*
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int i = pattern_size * idx;
@@ -93,22 +103,18 @@ __global__ void kmp_kernel(char* target, char* pattern, int* lps, int* ans, int 
         j = target_size;
     }
 
-    printf("%d, %d, %d, %d\n", idx, i, j, chunk_size);
-
     int k = 0;
 
     while (i < j){
-        printf("%d, %d\n", i, j);
         while (k > 0 && (target[i] != pattern[k])){
-            printf("%d, %d\n", i, k);
-            k = lps[k - 1];
+            k = n_lps[k - 1];
         }
         if (target[i] == pattern[k]){
             k++;
         }
         if (k == pattern_size){
             ans[i - k + 1] = 1;
-            k = lps[k-1];
+            k = n_lps[k-1];
         }
         i++;
     }
@@ -268,7 +274,7 @@ int main(int argc, char* argv[]){
     cudaMalloc((void**)&g_ans, target_size * sizeof(int));
     check_CUDA_Error("memory allocation on device");
 
-    printf("memory allocation on device\n");
+    //printf("memory allocation on device\n");
 
     cudaMemcpy(g_target, target, target_size * sizeof(char), cudaMemcpyHostToDevice);
     cudaMemcpy(g_pattern, pattern, pattern_size * sizeof(char), cudaMemcpyHostToDevice);
@@ -276,7 +282,7 @@ int main(int argc, char* argv[]){
     cudaMemcpy(g_ans, ans, target_size * sizeof(int), cudaMemcpyHostToDevice);
     check_CUDA_Error("memory copy to device");
 
-    printf("memory copy to device");
+    //printf("memory copy to device\n");
 
     //int dim = ceil((double) target_size / (2 * pattern_size));
     //dim3 numBlock(1, 1, 1);
@@ -289,22 +295,29 @@ int main(int argc, char* argv[]){
     for (int i = 0; i < num_chunks; i += NUM_THREADS_PER_BLOCK){
         num_blocks++;
     }
+    
+    dim3 numBlock(1, 1, 1);
+    dim3 numThread(n_thread, 1, 1);
+    
+    int chunk_size = ceil((double) target_size / (n_thread));
 
     //kmp_kernel<<<(target_size / pattern_size + n_thread) / n_thread, n_thread>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size);
     kmp_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, SIZE_OF_CHUNK);
-    check_CUDA_Error("Launch kernal");
+    //kmp_kernel<<<numBlock, numThread>>>(g_target, g_pattern, g_lps, g_ans, target_size, pattern_size, chunk_size);
     
-    printf("Launch kernal");
+    //check_CUDA_Error("Launch kernal");
+    
+    //printf("Launch kernal\n");
 
     cudaDeviceSynchronize();
     check_CUDA_Error("DeviceSynchronize");
 
-    printf("DeviceSynchronize");
+    //printf("DeviceSynchronize\n");
 
     cudaMemcpy(ans, g_ans, target_size * sizeof(int), cudaMemcpyDeviceToHost);
     check_CUDA_Error("memory copy to host");
 
-    printf("memory copy to host");
+    //printf("memory copy to host\n");
 
     end = clock();
 
