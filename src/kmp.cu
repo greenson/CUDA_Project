@@ -487,6 +487,8 @@ int main(int argc, char* argv[]){
 
     int shared = atoi(argv[1]);
 
+    cudaFree(0);
+
     time_taken = single_gpu(target, pattern, lps, ans, target_size, pattern_size, shared);
 
     count = 0;
@@ -503,6 +505,11 @@ int main(int argc, char* argv[]){
         ans[i] = 0;
     }
 
+    cudaSetDevice(0);
+    cudaFree(0);
+    cudaSetDevice(1);
+    cudaFree(0);
+
     time_taken = multi_gpu(target, pattern, lps, ans, target_size, pattern_size, shared);
 
     count = 0;
@@ -513,8 +520,9 @@ int main(int argc, char* argv[]){
         }
 
     }
-
+    
     printf("kmp multi_gpu found: %d, time taken: %lf\n", count, time_taken);
+
 
     if (atoi(argv[2]) != 0){
         cudaFreeHost(target);
