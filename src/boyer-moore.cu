@@ -65,10 +65,12 @@ int main(int argc, char *argv[])
 	fseek(file, 0, SEEK_SET);
 	// allocate buffer
 	// utilize pinned memory
-	if(type_of_device == 0){
+	if (type_of_device == 0)
+	{
 		tar = (char *)malloc(fsize);
-	} 
-	else{
+	}
+	else
+	{
 		cudaHostAlloc((void **)&tar, fsize, cudaHostAllocDefault);
 		check_CUDA_Error("Pinned memory allocation on host - text");
 	}
@@ -101,10 +103,12 @@ int main(int argc, char *argv[])
 		fseek(fp, 0, SEEK_SET);
 		// allocate buffer
 		// utilize pinned memory
-		if(type_of_device == 0){
+		if (type_of_device == 0)
+		{
 			pat = (char *)malloc(fsize);
 		}
-		else{
+		else
+		{
 			cudaHostAlloc((void **)&pat, fsize, cudaHostAllocDefault);
 			check_CUDA_Error("Pinned memory allocation on host - pattern");
 		}
@@ -121,7 +125,16 @@ int main(int argc, char *argv[])
 	int *output;
 
 	badchar = new int[NO_OF_CHARS];
-	output = new int[n];
+	//output = new int[n];
+	if (type_of_device == 0)
+	{
+		output = new int[n];
+	}
+	else
+	{
+		cudaHostAlloc((void **)&output, n * sizeof(int), cudaHostAllocDefault);
+		check_CUDA_Error("Pinned memory allocation on host - output");
+	}
 
 	badCharHeuristic(pat, badchar);
 	for (int i = 0; i < n; i++)
@@ -146,7 +159,7 @@ int main(int argc, char *argv[])
 		gpu_search(tar, n, pat, m, output, badchar);
 		end = clock();
 		cudaFreeHost(tar);
-  		cudaFreeHost(pat);
+		cudaFreeHost(pat);
 	}
 	// Multi GPU version
 	else if (type_of_device == 2)
@@ -159,7 +172,7 @@ int main(int argc, char *argv[])
 		multi_gpu_search(tar, n, pat, m, output, badchar);
 		end = clock();
 		cudaFreeHost(tar);
-  		cudaFreeHost(pat);
+		cudaFreeHost(pat);
 	}
 	else
 	{
@@ -198,7 +211,14 @@ int main(int argc, char *argv[])
 	printf("Time taken is %lf\n", time_taken);
 
 	delete badchar;
-	delete output;
+	if (type_of_device == 0)
+	{
+		delete output;
+	}
+	else
+	{
+		cudaFreeHost(output);
+	}
 	return 0;
 }
 
@@ -256,12 +276,7 @@ void gpu_search(char *tar, unsigned int n, char *pat, unsigned int m, int *outpu
 		numBlocks++;
 	}
 
-	//numBlocks = (n / m + NUM_THREADS_PER_BLOCK) / NUM_THREADS_PER_BLOCK;
-
 	printf("----Start copying data to GPU----\n");
-
-	//cudaSetDevice(1);
-	//check_CUDA_Error("Set Device 1 as current");
 
 	cudaMalloc((void **)&d_tar, n * sizeof(char));
 	cudaMalloc((void **)&d_pat, m * sizeof(char));
