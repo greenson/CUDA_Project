@@ -100,4 +100,4 @@ time: 0.06
 pat: 256
 time: 0.12
 pat: 512
-time: 0.24
+time: 0.20
