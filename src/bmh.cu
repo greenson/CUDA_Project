@@ -14,7 +14,7 @@ using namespace std;
 
 /*****************************************************************/
 
-// Function declarations: Feel free to add any functions you want.
+// Function declarations: 
 
 void badCharHeuristic(char *, int[]);
 void seq_search(char *, unsigned int, char *, unsigned int, int *, int *);
