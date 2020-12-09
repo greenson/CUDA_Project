@@ -112,7 +112,7 @@ __global__ void kmp_kernel_share(char* target, char* pattern, int* lps, int* ans
     int i = (idx * chunk_size);
     int j = (idx * chunk_size) + chunk_size + pattern_size;
 
-    __shared__ int n_lps[800];
+    __shared__ int n_lps[12000];
 
     __syncthreads();
 
@@ -409,7 +409,14 @@ int main(int argc, char* argv[]){
     }
 
     int* lps = (int*) malloc(pattern_size * sizeof(int));
-    int* ans = (int*) malloc(target_size * sizeof(int));
+    int* ans;
+    if (atoi(argv[2]) == 0){
+        ans = (int *)malloc(target_size * sizeof(int));
+    } else{
+        cudaHostAlloc((void **)&ans, target_size * sizeof(int), cudaHostAllocDefault);
+        check_CUDA_Error("Pinned memory allocation on host - ans");
+    }
+
     int* seq_ans = (int*) malloc(target_size * sizeof(int));
     int* naive_ans = (int*) malloc(target_size * sizeof(int));
 
@@ -505,6 +512,7 @@ int main(int argc, char* argv[]){
         ans[i] = 0;
     }
 
+
     cudaSetDevice(0);
     cudaFree(0);
     cudaSetDevice(1);
@@ -532,8 +540,11 @@ int main(int argc, char* argv[]){
         free(pattern);
     }
     free(lps);
-    free(ans);
-
+    if (atoi(argv[2]) != 0){
+        cudaFreeHost(ans);
+    } else {
+        free(ans);
+    }
     return 0;
 
 }
